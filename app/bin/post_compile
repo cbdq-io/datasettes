@@ -1,0 +1,338 @@
+#!/usr/bin/env python
+"""Post compile hook for Datasette."""
+import csv
+import json
+import logging
+import os
+import re
+import sys
+
+import smart_open
+from sqlite_utils import Database
+
+
+def bronze_generator(url: str) -> None:
+    """
+    Generate records from the input URL.
+
+    Parameters
+    ----------
+    url : str
+        The URL to import the bronze data from.
+    """
+    with smart_open.open(BRONZE_URL) as stream:
+        reader = csv.DictReader(stream)
+
+        for row in reader:
+            yield row
+
+
+def calculate_tmean(tmax: float, tmin: float) -> float:
+    """
+    Calculate the mean average temperature from the min/max.
+
+    Parameters
+    ----------
+    tmax : float
+        The average max temperature of a month.
+    tmin : float
+        The average min temperature of a month.
+
+    Returns
+    -------
+    float
+        The mean temperature or None if tmin or tmax aren't available.
+    """
+    if tmin == '' or tmax == '':
+        return None
+
+    return round((tmax + tmin) / 2, 1)
+
+
+def extract_lat_lon(text: str) -> dict:
+    """
+    Regular expression to find coordinates.
+
+    Parameters
+    ----------
+    text : str
+        Metadata text about a station.
+
+    Returns
+    -------
+    dict
+        Dict containing location data.
+    """
+    pattern = re.compile(r'.*Lat\s*(?P<Latitude>-?\d+\.\d+)\s*Lon\s*(?P<Longitude>-?\d+\.\d+)')
+
+    match = pattern.search(text)
+
+    if match:
+        return {
+            'Latitude': match.group('Latitude'),
+            'Longitude': match.group('Longitude')
+        }
+    else:
+        raise ValueError(f'Unable to find location in "{text}".')
+
+
+def silver_row_generator(query: str) -> dict:
+    """
+    Generate rows from an SQL query.
+
+    Parameters
+    ----------
+    query : str
+        An SQL query.
+
+    Yields
+    ------
+    dict
+        The row(s) from the query.
+    """
+    seasons = {
+        1: 'Winter',
+        2: 'Winter',
+        3: 'Spring',
+        4: 'Spring',
+        5: 'Spring',
+        6: 'Summer',
+        7: 'Summer',
+        8: 'Summer',
+        9: 'Autumn',
+        10: 'Autumn',
+        11: 'Autumn',
+        12: 'Winter'
+    }
+
+    for row in db.query(query):
+        station_name = row['station_id']
+        month_id = row['month_id']
+        year = int(month_id.split('-')[0])
+        row['year'] = year
+        month = int(month_id.split('-')[1])
+        row['month'] = month
+        row['uk_met_season'] = seasons[month]
+        row['fact_id'] = f'{station_name}-{month_id}'
+        row['tmean'] = calculate_tmean(row['tmax'], row['tmin'])
+        yield row
+
+
+logging.basicConfig()
+logger = logging.getLogger(os.path.basename(sys.argv[0]))
+BRONZE_URL = os.environ.get(
+    'BRONZE_URL',
+    '/'.join(
+        [
+            'https://raw.githubusercontent.com/cbdq-io/datasets',
+            'develop',
+            '/uk/gov/metoffice/historic_station_data/data/historic-station-data.csv'
+        ]
+    )
+)
+DB_NAME = 'dwh.db'
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'DEBUG')
+logger.setLevel(LOG_LEVEL)
+logger.info(f'LOG_LEVEL is "{LOG_LEVEL}".')
+
+logger.info('Creating database.')
+db = Database(DB_NAME, recreate=True)
+
+"""
+ ######
+ #     # #####   ####  #    # ###### ######
+ #     # #    # #    # ##   #     #  #
+ ######  #    # #    # # #  #    #   #####
+ #     # #####  #    # #  # #   #    #
+ #     # #   #  #    # #   ##  #     #
+ ######  #    #  ####  #    # ###### ######
+ """
+
+bronze_historic_station_data = db['bronze_historic_station_data']
+logger.info(f'Reading bronze data from "{BRONZE_URL}.')
+columns = {
+    'tmax': float,
+    'tmax_is_estimated': bool,
+    'tmin': float,
+    'tmin_is_estimated': bool,
+    'af': int,
+    'af_is_estimated': bool,
+    'rain': float,
+    'rain_is_estimated': bool,
+    'sun': float,
+    'sun_is_estimated': bool
+}
+bronze_historic_station_data.insert_all(bronze_generator(BRONZE_URL), columns=columns)
+
+"""
+  #####
+ #     # # #      #    # ###### #####
+ #       # #      #    # #      #    #
+  #####  # #      #    # #####  #    #
+       # # #      #    # #      #####
+ #     # # #       #  #  #      #   #
+  #####  # ######   ##   ###### #    #
+"""
+query = """
+    SELECT
+    station_name,
+    metadata
+    FROM
+    bronze_historic_station_data
+    WHERE
+    metadata IS NOT ''
+    """
+
+station_metadata = {}
+
+for row in db.query(query):
+    station_name = row['station_name']
+    metadata = row['metadata']
+
+    if station_name not in station_metadata:
+        station_metadata[station_name] = {'lines': [metadata]}
+    else:
+        station_metadata[station_name]['lines'].append(metadata)
+
+silver_station_data = db['silver_station_data']
+
+for station_name, station in station_metadata.items():
+    description = '\n'.join(station['lines'])
+    location = extract_lat_lon(description)
+    logger.debug(station_metadata[station_name])
+    query = f"""
+        SELECT
+            MIN(month) AS earliest,
+            MAX(month) AS latest
+        FROM
+            bronze_historic_station_data
+        WHERE
+            month IS NOT ''
+            AND station_name = '{station_name}'
+    """
+    logger.debug(query)
+    first_and_last = db.query(query)
+    first_and_last = list(first_and_last)[0]
+    logger.debug(first_and_last)
+    latitude = location['Latitude']
+    longitude = location['Longitude']
+    title = station['lines'][0]
+    description = '\n'.join(station['lines'][1:])
+    popup = {
+        'title': title,
+        'description': f'{description} ({first_and_last["earliest"]} - {first_and_last["latest"]})',
+        'link': f'/dwh/gold_dim_stations/{station_name}'
+    }
+    popup = json.dumps(popup)
+    silver_station_data.insert({
+        'station_name': station_name,
+        'title': title,
+        'description': description,
+        'latitude': latitude,
+        'longitude': longitude,
+        'earliest_data': first_and_last['earliest'],
+        'latest_data': first_and_last['latest'],
+        'popup': popup
+    }, pk='station_name')
+
+query = """
+    SELECT
+        a.station_name as station_id,
+        b.title,
+        b.description,
+        b.latitude AS latitude,
+        b.longitude AS longitude,
+        b.earliest_data AS earliest_data,
+        b.latest_data AS latest_data,
+        b.popup,
+        a.month AS month_id,
+        a.tmax AS tmax,
+        a.tmax_is_estimated,
+        a.tmin AS tmin,
+        a.tmin_is_estimated AS tmin_is_estimated,
+        a.af AS af,
+        a.af_is_estimated AS af_is_estimated,
+        a.rain AS rain,
+        a.rain_is_estimated AS rain_is_estimated,
+        a.sun AS sun,
+        a.sun_is_estimated AS sun_is_estimated,
+        a.sun_instrument AS sun_instrument,
+        a.provisional AS is_provisional
+    FROM
+        bronze_historic_station_data AS a,
+        silver_station_data AS b
+    WHERE
+        a.station_name = b.station_name
+        AND a.metadata IS ""
+    """
+silver_historic_station_data = db['silver_historic_station_data']
+silver_historic_station_data.insert_all(silver_row_generator(query), columns=columns)
+
+"""
+  #####
+ #     #  ####  #      #####
+ #       #    # #      #    #
+ #  #### #    # #      #    #
+ #     # #    # #      #    #
+ #     # #    # #      #    #
+  #####   ####  ###### #####
+"""
+query = """
+SELECT
+  month_id,
+  year,
+  month,
+  uk_met_season
+FROM
+  silver_historic_station_data
+GROUP BY month_id
+"""
+gold_dim_months = db['gold_dim_months']
+gold_dim_months.insert_all(db.query(query), pk='month_id')
+
+query = """
+SELECT
+  station_id,
+  title,
+  description,
+  latitude,
+  longitude,
+  earliest_data,
+  latest_data,
+  popup
+FROM
+  silver_historic_station_data
+GROUP BY
+  station_id
+"""
+gold_dim_stations = db['gold_dim_stations']
+gold_dim_stations.insert_all(db.query(query), pk='station_id')
+
+query = """
+SELECT
+  fact_id,
+  station_id,
+  month_id,
+  tmax,
+  tmax_is_estimated,
+  tmean,
+  tmin,
+  tmin_is_estimated,
+  af,
+  af_is_estimated,
+  rain,
+  rain_is_estimated,
+  sun,
+  sun_is_estimated,
+  sun_instrument,
+  is_provisional
+FROM
+  silver_historic_station_data
+"""
+gold_fact_measurements = db['gold_fact_measurements']
+foreign_keys = [
+    ('station_id', 'gold_dim_stations'),
+    ('month_id', 'gold_dim_months')
+]
+gold_fact_measurements.insert_all(db.query(query), columns=columns, pk='fact_id', foreign_keys=foreign_keys)
+db.close()
