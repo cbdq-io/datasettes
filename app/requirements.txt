@@ -1,0 +1,7 @@
+datasette
+datasette-cluster-map
+datasette-dashboards
+datasette-leaflet
+datasette-plot
+datasette-render-markdown
+smart_open[http]

@@ -1,0 +1,498 @@
+---
+databases:
+  dwh:
+    description: |
+      Monthly data are available for a selection of long-running historic
+      stations. The series typically range from 50 to more than 100 years in
+      length.
+    license: UK Open Government Licence for Public Sector Information v3.0
+    license_url: https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/
+    source: Met Office - Historic station data
+    source_url: https://www.metoffice.gov.uk/research/climate/maps-and-data/historic-station-data
+    tables:
+      bronze_historic_station_data:
+        hidden: true
+      gold_fact_measurements:
+        columns:
+          af: Days of air frost.
+          af_is_estimated: True if af is estimated, unset if af is unavailable.
+          is_provisional: Data are indicated as provisional until the full network quality control has been carried out. After this, data are final.
+          rain: Total rainfall (mm).
+          rain_is_estimated: True if rain is estimated, unset if rain is unavailable.
+          sun: Total sunshine duration (hours).
+          sun_instrument: Sunshine data recording instrument.
+          sun_is_estimated: True if sun is estimated, unset if sun is unavailable.
+          tmax: Mean daily maximum temperature (degC).
+          tmax_is_estimated: True if tmax is estimated, unset if tmax is unavailable.
+          tmean: The monthly mean temperature (degC).  Unset if tmax or tmean are unavailable.
+          tmin: Mean daily minimum temperature (degC).
+          tmin_is_estimated: True if tmin is estimated, unset if tmin is unavailable.
+      silver_historic_station_data:
+        hidden: true
+      silver_station_data:
+        hidden: true
+    title: UK Climate Data for Historic Stations
+
+plugins:
+  datasette-dashboards:
+    historic-station-data:
+      charts:
+        af:
+          db: dwh
+          display:
+            mark: { type: line, tooltip: true }
+            encoding:
+              x: { field: Month, type: temporal, timeUnit: yearmonth }
+              y: { field: AirFrost, type: quantitative }
+          library: vega-lite
+          query: |
+            SELECT
+              month_id AS Month,
+              AVG(af) AS AirFrost
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+            GROUP BY
+              Month
+            ORDER BY
+              Month
+          title: Air Frost (days)
+
+        analysis-note:
+          library: markdown
+          display: |-
+            # Analysis Details
+
+            This dataset is taken from
+            <https://github.com/cbdq-io/datasets/tree/develop/uk/gov/metoffice/historic_station_data>
+            which is wrangled from
+            <https://www.metoffice.gov.uk/research/climate/maps-and-data/historic-station-data>.
+
+        dq-af:
+          db: dwh
+          display:
+            mark: { type: arc, tooltip: true }
+            encoding:
+              color:
+                field: Category
+                type: nominal
+                scale:
+                  domain:
+                    - IS_OK
+                    - IS_ESTIMATED
+                    - IS_MISSING
+                  range:
+                    - green
+                    - orange
+                    - red
+              theta: { field: Count, type: quantitative, stack: normalize}
+            transform:
+              - fold:
+                  - IS_OK
+                  - IS_ESTIMATED
+                  - IS_MISSING
+                as:
+                  - Category
+                  - Count
+          library: vega-lite
+          query: |
+            SELECT
+              SUM(
+                CASE
+                  WHEN af_is_estimated is "False"
+                  AND af != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_OK,
+              SUM(
+                CASE
+                  WHEN af_is_estimated is "True"
+                  AND af != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_ESTIMATED,
+              SUM(
+                CASE
+                  WHEN tmax IS "" THEN 1
+                  ELSE 0
+                END
+              ) IS_MISSING
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+          title: Data Quality - Air Frost
+
+        dq-rain:
+          db: dwh
+          display:
+            mark: { type: arc, tooltip: true }
+            encoding:
+              color:
+                field: Category
+                type: nominal
+                scale:
+                  domain:
+                    - IS_OK
+                    - IS_ESTIMATED
+                    - IS_MISSING
+                  range:
+                    - green
+                    - orange
+                    - red
+              theta: { field: Count, type: quantitative, stack: normalize}
+            transform:
+              - fold:
+                  - IS_OK
+                  - IS_ESTIMATED
+                  - IS_MISSING
+                as:
+                  - Category
+                  - Count
+          library: vega-lite
+          query: |
+            SELECT
+              SUM(
+                CASE
+                  WHEN rain_is_estimated is "False"
+                  AND rain != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_OK,
+              SUM(
+                CASE
+                  WHEN rain_is_estimated is "True"
+                  AND rain != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_ESTIMATED,
+              SUM(
+                CASE
+                  WHEN rain IS "" THEN 1
+                  ELSE 0
+                END
+              ) IS_MISSING
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+          title: Data Quality - Rain
+
+        dq-tmax:
+          db: dwh
+          display:
+            mark: { type: arc, tooltip: true }
+            encoding:
+              color:
+                field: Category
+                type: nominal
+                scale:
+                  domain:
+                    - IS_OK
+                    - IS_ESTIMATED
+                    - IS_MISSING
+                  range:
+                    - green
+                    - orange
+                    - red
+              theta: { field: Count, type: quantitative, stack: normalize}
+            transform:
+              - fold:
+                  - IS_OK
+                  - IS_ESTIMATED
+                  - IS_MISSING
+                as:
+                  - Category
+                  - Count
+          library: vega-lite
+          query: |
+            SELECT
+              SUM(
+                CASE
+                  WHEN tmax_is_estimated is "False"
+                  AND tmax != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_OK,
+              SUM(
+                CASE
+                  WHEN tmax_is_estimated is "True"
+                  AND tmax != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_ESTIMATED,
+              SUM(
+                CASE
+                  WHEN tmax IS "" THEN 1
+                  ELSE 0
+                END
+              ) IS_MISSING
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+          title: Data Quality - Tmax
+
+        dq-tmin:
+          db: dwh
+          display:
+            mark: { type: arc, tooltip: true }
+            encoding:
+              color:
+                field: Category
+                type: nominal
+                scale:
+                  domain:
+                    - IS_OK
+                    - IS_ESTIMATED
+                    - IS_MISSING
+                  range:
+                    - green
+                    - orange
+                    - red
+              theta: { field: Count, type: quantitative, stack: normalize}
+            transform:
+              - fold:
+                  - IS_OK
+                  - IS_ESTIMATED
+                  - IS_MISSING
+                as:
+                  - Category
+                  - Count
+          library: vega-lite
+          query: |
+            SELECT
+              SUM(
+                CASE
+                  WHEN tmin_is_estimated is "False"
+                  AND tmin != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_OK,
+              SUM(
+                CASE
+                  WHEN tmin_is_estimated is "True"
+                  AND tmin != "" THEN 1
+                  ELSE 0
+                END
+              ) IS_ESTIMATED,
+              SUM(
+                CASE
+                  WHEN tmin IS "" THEN 1
+                  ELSE 0
+                END
+              ) IS_MISSING
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+          title: Data Quality - Tmin
+
+        earliest-data:
+          db: dwh
+          library: table
+          query: |
+            SELECT
+              *
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+            ORDER BY month_id
+            LIMIT
+              10
+          title: Earliest Data in Selection
+
+        metrics-count:
+          db: dwh
+          display:
+            field: count
+            prefix:
+            suffix:
+          library: metric
+          query: SELECT count(*) AS count FROM gold_fact_measurements WHERE TRUE [[ AND month_id >= :start_month ]] [[ AND month_id <= :end_month ]] [[ AND station_id == :station_id ]]
+          title: Total Number of Filtered Data Metrics
+
+        latest-data:
+          db: dwh
+          library: table
+          query: |
+            SELECT
+              *
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+            ORDER BY fact_id DESC
+            LIMIT
+              10
+          title: Latest Data in Selection
+
+        rainfall:
+          db: dwh
+          display:
+            mark: { type: line, tooltip: true }
+            encoding:
+              x: { field: Month, type: temporal, timeUnit: yearmonth }
+              y: { field: RainMM, type: quantitative }
+          library: vega-lite
+          query: |
+            SELECT
+              month_id AS Month,
+              AVG(rain) AS RainMM
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+            GROUP BY
+              Month
+            ORDER BY
+              Month
+          title: Rainfall (mm)
+
+        stations_map:
+          db: dwh
+          display:
+            show_latlng_popup: true
+          library: map
+          query: |
+            SELECT latitude, longitude
+            FROM gold_dim_stations
+            WHERE
+              TRUE
+              [[ AND station_id = :station_id ]]
+          title: Station Locations
+
+        sun:
+          db: dwh
+          display:
+            mark: { type: line, tooltip: true }
+            encoding:
+              x: { field: Month, type: temporal, timeUnit: yearmonth }
+              y: { field: Hours, type: quantitative }
+          library: vega-lite
+          query: |
+            SELECT
+              month_id AS Month,
+              AVG(sun) AS Hours
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+            GROUP BY
+              Month
+            ORDER BY
+              Month
+          title: Sunshine (Hours)
+
+        temp:
+          db: dwh
+          display:
+            layer:
+              - mark: { type: line, tooltip: true }
+                encoding:
+                  x: { field: Month, type: temporal, timeUnit: yearmonth }
+                  y: { field: Max, type: quantitative }
+                  color:
+                    value: red
+              - mark: { type: line, tooltip: true }
+                encoding:
+                  x: { field: Month, type: temporal, timeUnit: yearmonth }
+                  y: { field: Mean, type: quantitative }
+                  color:
+                    value: purple
+              - mark: { type: line, tooltip: true }
+                encoding:
+                  x: { field: Month, type: temporal, timeUnit: yearmonth }
+                  y: { field: Min, type: quantitative }
+                  color:
+                    value: blue
+          library: vega-lite
+          query: |
+            SELECT
+              month_id AS Month,
+              AVG(tmax) AS Max,
+              AVG(tmean) AS Mean,
+              AVG(tmin) AS Min
+            FROM
+              gold_fact_measurements
+            WHERE
+              TRUE
+              [[ AND month_id >= :start_month ]]
+              [[ AND month_id <= :end_month ]]
+              [[ AND station_id == :station_id ]]
+            GROUP BY
+              Month
+            ORDER BY
+              Month
+          title: Max, Mean & Min Temperature (DegC)
+
+      description: |
+        Monthly data are available for a selection of long-running historic
+        stations. The series typically range from 50 to more than 100 years in
+        length.
+
+      filters:
+        start_month:
+          name: Start Month
+          type: select
+          db: dwh
+          query: SELECT month_id FROM gold_dim_months ORDER BY month_id
+        end_month:
+          name: End Month
+          type: select
+          db: dwh
+          query: SELECT month_id FROM gold_dim_months ORDER BY month_id
+        station_id:
+          name: Station ID
+          type: select
+          db: dwh
+          query: SELECT station_id FROM gold_dim_stations ORDER BY station_id
+
+      layout:
+        - [analysis-note, metrics-count]
+        - [analysis-note, stations_map]
+        - [temp, temp]
+        - [tmax, tmax]
+        - [tmean, tmean]
+        - [tmin, tmin]
+        - [sun, sun]
+        - [rainfall, rainfall]
+        - [af, af]
+        - [dq-tmax, dq-tmin]
+        - [dq-af, dq-rain]
+        - [latest-data, latest-data]
+        - [earliest-data, earliest-data]
+
+      settings:
+        allow_fullscreen: true
+
+      title: UK Climate Data for Historic Stations

@@ -1,0 +1,10 @@
+---
+version: "3"
+
+services:
+  datasette:
+    build:
+      context: .
+    image: datasettes:latest
+    ports:
+      - "8001:8001"
